@@ -1,6 +1,6 @@
-# OpenCV headless for server deployment
+# OpenCV headless for server deployment (must come after scenedetect)
+scenedetect
 opencv-python-headless
-scenedetect[opencv]
 ultralytics
 torch
 torchvision

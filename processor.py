@@ -221,11 +221,23 @@ def process_video(input_video: str, output_video: str, progress_callback=None) -
             processed_frame = frame[crop_box[1]:crop_box[3], crop_box[0]:crop_box[2]]
             output_frame = cv2.resize(processed_frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
         else:  # LETTERBOX
+            # Create blurred background that fills the frame
+            bg_scale = OUTPUT_HEIGHT / original_height
+            bg_width = int(original_width * bg_scale)
+            bg_frame = cv2.resize(frame, (bg_width, OUTPUT_HEIGHT))
+            # Center crop to output width
+            x_offset = (bg_width - OUTPUT_WIDTH) // 2
+            bg_frame = bg_frame[:, x_offset:x_offset + OUTPUT_WIDTH]
+            # Apply blur
+            blurred_bg = cv2.GaussianBlur(bg_frame, (99, 99), 0)
+
+            # Scale the main content
             scale_factor = OUTPUT_WIDTH / original_width
             scaled_height = int(original_height * scale_factor)
             scaled_frame = cv2.resize(frame, (OUTPUT_WIDTH, scaled_height))
 
-            output_frame = np.zeros((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), dtype=np.uint8)
+            # Composite: blurred background + sharp foreground
+            output_frame = blurred_bg.copy()
             y_offset = (OUTPUT_HEIGHT - scaled_height) // 2
             output_frame[y_offset:y_offset + scaled_height, :] = scaled_frame
 

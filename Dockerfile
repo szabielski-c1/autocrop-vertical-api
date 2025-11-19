@@ -18,9 +18,9 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Force uninstall opencv-python and ensure headless is installed
-RUN pip uninstall -y opencv-python opencv-contrib-python 2>/dev/null || true && \
-    pip install --no-cache-dir opencv-python-headless
+# Force reinstall opencv-python-headless to ensure it's the only opencv
+RUN pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless 2>/dev/null || true && \
+    pip install --no-cache-dir --force-reinstall opencv-python-headless
 
 # Copy application code
 COPY . .

@@ -1,6 +1,5 @@
-# OpenCV headless for server deployment
-opencv-python-headless
-scenedetect[opencv-headless]
+# Core dependencies
+scenedetect
 ultralytics
 torch
 torchvision
@@ -11,3 +10,5 @@ python-multipart
 celery[redis]
 redis
 requests
+# OpenCV headless MUST be last to override any opencv-python installed by other packages
+opencv-python-headless

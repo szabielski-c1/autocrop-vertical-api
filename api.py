@@ -1,7 +1,9 @@
 import os
 import uuid
 import shutil
+import requests
 from pathlib import Path
+from urllib.parse import urlparse
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +53,11 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class ProcessUrlRequest(BaseModel):
+    url: HttpUrl
+    webhook_url: Optional[HttpUrl] = None
+
+
 @app.post("/process", response_model=JobResponse)
 async def process_video_endpoint(
     file: UploadFile = File(...),
@@ -89,6 +96,55 @@ async def process_video_endpoint(
         job_id=job_id,
         status="queued",
         message="Video queued for processing"
+    )
+
+
+@app.post("/process-url", response_model=JobResponse)
+async def process_video_from_url(request: ProcessUrlRequest):
+    """
+    Process a video from a URL (e.g., S3, cloud storage).
+
+    Downloads the video from the provided URL and queues it for processing.
+    Optionally provide a webhook_url to receive results when processing completes.
+    """
+    # Parse URL to get filename and extension
+    parsed_url = urlparse(str(request.url))
+    url_path = parsed_url.path
+
+    # Try to get extension from URL path
+    ext = Path(url_path).suffix.lower()
+    if ext not in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
+        # Default to .mp4 if we can't determine extension
+        ext = '.mp4'
+
+    # Generate unique job ID
+    job_id = str(uuid.uuid4())
+
+    # Download file from URL
+    input_path = UPLOAD_DIR / f"{job_id}_input{ext}"
+    output_path = OUTPUT_DIR / f"{job_id}_output.mp4"
+
+    try:
+        response = requests.get(str(request.url), stream=True, timeout=300)
+        response.raise_for_status()
+
+        with open(input_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to download video: {str(e)}")
+
+    # Queue the processing task
+    webhook_url = str(request.webhook_url) if request.webhook_url else None
+    task = process_video_task.apply_async(
+        args=[str(input_path), str(output_path), webhook_url],
+        task_id=job_id
+    )
+
+    return JobResponse(
+        job_id=job_id,
+        status="queued",
+        message="Video downloaded and queued for processing"
     )
 
 

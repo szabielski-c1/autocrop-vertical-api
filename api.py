@@ -1,17 +1,19 @@
 import os
 import uuid
 import shutil
+import tempfile
 import requests
 from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import Optional
 from celery.result import AsyncResult
 
 from tasks import celery_app, process_video_task, get_job_progress
+import s3_storage
 
 app = FastAPI(
     title="AutoCrop-Vertical API",
@@ -28,11 +30,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure upload/output directories
-UPLOAD_DIR = Path(os.getenv('UPLOAD_DIR', './uploads'))
-OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', './outputs'))
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Local temp directory for processing
+TEMP_DIR = Path(tempfile.gettempdir()) / "autocrop"
+TEMP_DIR.mkdir(exist_ok=True)
 
 
 class ProcessRequest(BaseModel):
@@ -76,19 +76,33 @@ async def process_video_endpoint(
     # Generate unique job ID
     job_id = str(uuid.uuid4())
 
-    # Save uploaded file
-    input_path = UPLOAD_DIR / f"{job_id}_input{Path(file.filename).suffix}"
-    output_path = OUTPUT_DIR / f"{job_id}_output.mp4"
+    # Define S3 keys
+    ext = Path(file.filename).suffix
+    input_s3_key = f"inputs/{job_id}_input{ext}"
+    output_s3_key = f"outputs/{job_id}_output.mp4"
+
+    # Save to temp file first
+    temp_input = TEMP_DIR / f"{job_id}_input{ext}"
 
     try:
-        with open(input_path, "wb") as buffer:
+        with open(temp_input, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        # Upload to S3
+        if not s3_storage.upload_file(str(temp_input), input_s3_key):
+            raise HTTPException(status_code=500, detail="Failed to upload file to S3")
+
+        # Clean up temp file
+        temp_input.unlink()
+
     except Exception as e:
+        if temp_input.exists():
+            temp_input.unlink()
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
 
-    # Queue the processing task
+    # Queue the processing task with S3 keys
     task = process_video_task.apply_async(
-        args=[str(input_path), str(output_path), webhook_url],
+        args=[input_s3_key, output_s3_key, webhook_url],
         task_id=job_id
     )
 
@@ -120,24 +134,37 @@ async def process_video_from_url(request: ProcessUrlRequest):
     # Generate unique job ID
     job_id = str(uuid.uuid4())
 
-    # Download file from URL
-    input_path = UPLOAD_DIR / f"{job_id}_input{ext}"
-    output_path = OUTPUT_DIR / f"{job_id}_output.mp4"
+    # Define S3 keys
+    input_s3_key = f"inputs/{job_id}_input{ext}"
+    output_s3_key = f"outputs/{job_id}_output.mp4"
+
+    # Download file from URL to temp
+    temp_input = TEMP_DIR / f"{job_id}_input{ext}"
 
     try:
         response = requests.get(str(request.url), stream=True, timeout=300)
         response.raise_for_status()
 
-        with open(input_path, 'wb') as f:
+        with open(temp_input, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
+
+        # Upload to S3
+        if not s3_storage.upload_file(str(temp_input), input_s3_key):
+            raise HTTPException(status_code=500, detail="Failed to upload file to S3")
+
+        # Clean up temp file
+        temp_input.unlink()
+
     except requests.exceptions.RequestException as e:
+        if temp_input.exists():
+            temp_input.unlink()
         raise HTTPException(status_code=400, detail=f"Failed to download video: {str(e)}")
 
     # Queue the processing task
     webhook_url = str(request.webhook_url) if request.webhook_url else None
     task = process_video_task.apply_async(
-        args=[str(input_path), str(output_path), webhook_url],
+        args=[input_s3_key, output_s3_key, webhook_url],
         task_id=job_id
     )
 
@@ -198,7 +225,7 @@ async def get_status(job_id: str):
 @app.get("/download/{job_id}")
 async def download_result(job_id: str):
     """
-    Download the processed video.
+    Download the processed video via presigned S3 URL.
     """
     # Check if job is complete
     task_result = AsyncResult(job_id, app=celery_app)
@@ -209,17 +236,19 @@ async def download_result(job_id: str):
             detail=f"Job not complete. Current status: {task_result.state}"
         )
 
-    # Find the output file
-    output_path = OUTPUT_DIR / f"{job_id}_output.mp4"
+    # Generate presigned URL for output
+    output_s3_key = f"outputs/{job_id}_output.mp4"
 
-    if not output_path.exists():
+    if not s3_storage.file_exists(output_s3_key):
         raise HTTPException(status_code=404, detail="Output file not found")
 
-    return FileResponse(
-        path=str(output_path),
-        media_type="video/mp4",
-        filename=f"vertical_{job_id}.mp4"
-    )
+    # Redirect to presigned URL (1 hour expiry)
+    presigned_url = s3_storage.generate_presigned_url(output_s3_key, expiration=3600)
+
+    if not presigned_url:
+        raise HTTPException(status_code=500, detail="Failed to generate download URL")
+
+    return RedirectResponse(url=presigned_url)
 
 
 @app.post("/retry/{job_id}")
@@ -227,30 +256,39 @@ async def retry_job(job_id: str, webhook_url: Optional[str] = None):
     """
     Retry a failed job by re-queuing it with the same input file.
     """
-    # Find the input file
-    input_path = None
+    # Find the input file in S3
+    input_s3_key = None
     for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
-        potential_path = UPLOAD_DIR / f"{job_id}_input{ext}"
-        if potential_path.exists():
-            input_path = potential_path
+        potential_key = f"inputs/{job_id}_input{ext}"
+        if s3_storage.file_exists(potential_key):
+            input_s3_key = potential_key
             break
 
-    if not input_path:
+    if not input_s3_key:
         raise HTTPException(status_code=404, detail="Input file not found. Cannot retry.")
 
     # Generate new job ID
     new_job_id = str(uuid.uuid4())
 
-    # Rename input file to new job ID
-    new_input_path = UPLOAD_DIR / f"{new_job_id}_input{input_path.suffix}"
-    input_path.rename(new_input_path)
+    # Copy input to new key in S3
+    ext = Path(input_s3_key).suffix
+    new_input_s3_key = f"inputs/{new_job_id}_input{ext}"
+    output_s3_key = f"outputs/{new_job_id}_output.mp4"
 
-    # Set output path
-    output_path = OUTPUT_DIR / f"{new_job_id}_output.mp4"
+    # Download old input and re-upload with new key
+    temp_file = TEMP_DIR / f"{new_job_id}_temp{ext}"
+    try:
+        s3_storage.download_file(input_s3_key, str(temp_file))
+        s3_storage.upload_file(str(temp_file), new_input_s3_key)
+        temp_file.unlink()
+    except Exception as e:
+        if temp_file.exists():
+            temp_file.unlink()
+        raise HTTPException(status_code=500, detail=f"Failed to copy input file: {str(e)}")
 
     # Queue the processing task
     task = process_video_task.apply_async(
-        args=[str(new_input_path), str(output_path), webhook_url],
+        args=[new_input_s3_key, output_s3_key, webhook_url],
         task_id=new_job_id
     )
 
@@ -266,16 +304,14 @@ async def delete_job(job_id: str):
     """
     Delete a job and its associated files.
     """
-    # Remove input file
+    # Remove input file from S3
     for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
-        input_path = UPLOAD_DIR / f"{job_id}_input{ext}"
-        if input_path.exists():
-            input_path.unlink()
+        input_key = f"inputs/{job_id}_input{ext}"
+        s3_storage.delete_file(input_key)
 
-    # Remove output file
-    output_path = OUTPUT_DIR / f"{job_id}_output.mp4"
-    if output_path.exists():
-        output_path.unlink()
+    # Remove output file from S3
+    output_key = f"outputs/{job_id}_output.mp4"
+    s3_storage.delete_file(output_key)
 
     # Revoke task if still pending
     celery_app.control.revoke(job_id, terminate=True)

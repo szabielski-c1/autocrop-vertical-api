@@ -1,7 +1,10 @@
 import os
+import tempfile
 import requests
+from pathlib import Path
 from celery import Celery
 from processor import process_video
+import s3_storage
 
 # Configure Celery
 celery_app = Celery(
@@ -23,6 +26,10 @@ celery_app.conf.update(
 # Storage for job progress
 job_progress = {}
 
+# Temp directory for processing
+TEMP_DIR = Path(tempfile.gettempdir()) / "autocrop_worker"
+TEMP_DIR.mkdir(exist_ok=True)
+
 
 def update_progress(job_id):
     """Returns a progress callback for a specific job."""
@@ -37,13 +44,13 @@ def update_progress(job_id):
 
 
 @celery_app.task(bind=True, name='process_video_task')
-def process_video_task(self, input_path: str, output_path: str, webhook_url: str = None):
+def process_video_task(self, input_s3_key: str, output_s3_key: str, webhook_url: str = None):
     """
     Celery task to process video in background.
 
     Args:
-        input_path: Path to uploaded input video
-        output_path: Path for processed output video
+        input_s3_key: S3 key for input video
+        output_s3_key: S3 key for output video
         webhook_url: Optional URL to POST results when complete
 
     Returns:
@@ -51,20 +58,41 @@ def process_video_task(self, input_path: str, output_path: str, webhook_url: str
     """
     job_id = self.request.id
 
+    # Local paths for processing
+    ext = Path(input_s3_key).suffix
+    local_input = TEMP_DIR / f"{job_id}_input{ext}"
+    local_output = TEMP_DIR / f"{job_id}_output.mp4"
+
     try:
         # Update task state
-        self.update_state(state='PROCESSING', meta={'step': 1, 'message': 'Starting...'})
+        self.update_state(state='PROCESSING', meta={'step': 1, 'message': 'Downloading from S3...'})
+
+        # Download input from S3
+        if not s3_storage.download_file(input_s3_key, str(local_input)):
+            raise Exception(f"Failed to download input from S3: {input_s3_key}")
 
         # Process the video
         result = process_video(
-            input_path,
-            output_path,
+            str(local_input),
+            str(local_output),
             progress_callback=update_progress(job_id)
         )
 
-        # Add job info to result
+        # Upload output to S3
+        self.update_state(state='PROCESSING', meta={'step': 5, 'message': 'Uploading to S3...'})
+        if not s3_storage.upload_file(str(local_output), output_s3_key):
+            raise Exception(f"Failed to upload output to S3: {output_s3_key}")
+
+        # Clean up local files
+        if local_input.exists():
+            local_input.unlink()
+        if local_output.exists():
+            local_output.unlink()
+
+        # Update result with S3 info
         result['job_id'] = job_id
         result['status'] = 'completed'
+        result['output_s3_key'] = output_s3_key
 
         # Send webhook if provided
         if webhook_url:
@@ -92,6 +120,12 @@ def process_video_task(self, input_path: str, output_path: str, webhook_url: str
         return result
 
     except Exception as e:
+        # Clean up local files on error
+        if local_input.exists():
+            local_input.unlink()
+        if local_output.exists():
+            local_output.unlink()
+
         error_result = {
             'job_id': job_id,
             'status': 'failed',

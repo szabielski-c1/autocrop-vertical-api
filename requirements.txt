@@ -10,5 +10,6 @@ python-multipart
 celery[redis]
 redis
 requests
+boto3
 # OpenCV headless MUST be last to override any opencv-python installed by other packages
 opencv-python-headless

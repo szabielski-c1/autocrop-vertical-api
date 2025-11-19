@@ -192,6 +192,7 @@ def process_video(input_video: str, output_video: str, progress_callback=None) -
         'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
         '-s', f'{OUTPUT_WIDTH}x{OUTPUT_HEIGHT}', '-pix_fmt', 'bgr24',
         '-r', str(fps), '-i', '-', '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p', '-profile:v', 'high', '-level', '4.0',
         '-preset', 'fast', '-crf', '23', '-an', temp_video_output
     ]
 
@@ -278,7 +279,7 @@ def process_video(input_video: str, output_video: str, progress_callback=None) -
 
     merge_command = [
         'ffmpeg', '-y', '-i', temp_video_output, '-i', temp_audio_output,
-        '-c:v', 'copy', '-c:a', 'copy', output_video
+        '-c:v', 'copy', '-c:a', 'aac', '-movflags', '+faststart', output_video
     ]
     result = subprocess.run(merge_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 

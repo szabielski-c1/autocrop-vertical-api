@@ -33,11 +33,25 @@
             margin-bottom: 5px;
             font-weight: 500;
         }
-        .config input {
+        .config input[type="text"] {
             width: 100%;
             padding: 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
+        }
+        .toggle-group {
+            display: flex;
+            gap: 20px;
+        }
+        .toggle-option {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            font-weight: normal;
+        }
+        .toggle-option input {
+            cursor: pointer;
         }
         .file-input {
             margin: 15px 0;
@@ -159,8 +173,15 @@
 
     <div class="upload-section">
         <div class="config">
-            <label for="api-url">API URL</label>
-            <input type="text" id="api-url" value="https://autocrop-api-production.up.railway.app">
+            <label>API Server</label>
+            <div class="toggle-group">
+                <label class="toggle-option">
+                    <input type="radio" name="api-server" value="http://localhost:8000"> Local
+                </label>
+                <label class="toggle-option">
+                    <input type="radio" name="api-server" value="https://autocrop-api-production.up.railway.app" checked> Remote
+                </label>
+            </div>
         </div>
 
         <div class="config">
@@ -185,8 +206,12 @@
     </div>
 
     <script>
-        const apiUrlInput = document.getElementById('api-url');
         const webhookUrlInput = document.getElementById('webhook-url');
+
+        function getApiUrl() {
+            const selected = document.querySelector('input[name="api-server"]:checked');
+            return selected ? selected.value : 'http://localhost:8000';
+        }
         const fileInput = document.getElementById('video-files');
         const selectedFilesDiv = document.getElementById('selected-files');
         const uploadBtn = document.getElementById('upload-btn');
@@ -210,7 +235,7 @@
         // Upload handler
         uploadBtn.addEventListener('click', async () => {
             const files = fileInput.files;
-            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            const apiUrl = getApiUrl().replace(/\/$/, '');
             const webhookUrl = webhookUrlInput.value;
 
             uploadBtn.disabled = true;
@@ -293,7 +318,7 @@
 
         // Poll for status updates
         async function pollStatuses() {
-            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            const apiUrl = getApiUrl().replace(/\/$/, '');
             const pendingJobs = jobs.filter(j => j.status === 'pending' || j.status === 'processing');
 
             if (pendingJobs.length === 0) {
@@ -337,13 +362,13 @@
 
         // Download
         function downloadJob(jobId) {
-            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            const apiUrl = getApiUrl().replace(/\/$/, '');
             window.open(`${apiUrl}/download/${jobId}`, '_blank');
         }
 
         // Delete
         async function deleteJob(jobId) {
-            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            const apiUrl = getApiUrl().replace(/\/$/, '');
 
             try {
                 await fetch(`${apiUrl}/job/${jobId}`, { method: 'DELETE' });

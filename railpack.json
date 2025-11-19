@@ -1,0 +1,10 @@
+{
+  "$schema": "https://railpack.dev/schema.json",
+  "packages": {
+    "apt": [
+      "ffmpeg",
+      "libgl1-mesa-glx",
+      "libglib2.0-0"
+    ]
+  }
+}

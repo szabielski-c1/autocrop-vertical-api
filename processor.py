@@ -228,8 +228,10 @@ def process_video(input_video: str, output_video: str, progress_callback=None) -
             # Center crop to output width
             x_offset = (bg_width - OUTPUT_WIDTH) // 2
             bg_frame = bg_frame[:, x_offset:x_offset + OUTPUT_WIDTH]
-            # Apply blur
-            blurred_bg = cv2.GaussianBlur(bg_frame, (99, 99), 0)
+            # Apply blur (downscale, blur, upscale for performance)
+            small = cv2.resize(bg_frame, (OUTPUT_WIDTH // 4, OUTPUT_HEIGHT // 4))
+            blurred_small = cv2.GaussianBlur(small, (25, 25), 0)
+            blurred_bg = cv2.resize(blurred_small, (OUTPUT_WIDTH, OUTPUT_HEIGHT))
 
             # Scale the main content
             scale_factor = OUTPUT_WIDTH / original_width

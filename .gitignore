@@ -1,5 +1,9 @@
 # Video files
 *.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
 
 # YOLO model
 *.pt
@@ -8,6 +12,23 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
 
 # Temporary files
 temp_*.mp4
+*_temp_*
+
+# Uploads and outputs
+uploads/
+outputs/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+
+# Celery
+celerybeat-schedule
+celerybeat.pid

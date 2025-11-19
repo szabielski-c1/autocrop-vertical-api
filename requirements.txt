@@ -4,3 +4,9 @@ ultralytics
 torch
 torchvision
 tqdm
+fastapi
+uvicorn[standard]
+python-multipart
+celery[redis]
+redis
+requests

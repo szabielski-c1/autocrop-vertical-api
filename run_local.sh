@@ -25,15 +25,22 @@ else
     echo "Redis already running"
 fi
 
-# Activate virtual environment if it exists
-if [ -d ".venv" ]; then
-    source .venv/bin/activate
+# Set up virtual environment paths
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+
+if [ -d "$VENV_DIR" ]; then
+    CELERY_CMD="$VENV_DIR/bin/celery"
+    UVICORN_CMD="$VENV_DIR/bin/uvicorn"
+else
+    CELERY_CMD="celery"
+    UVICORN_CMD="uvicorn"
 fi
 
 # Check if Celery is already running
 if ! pgrep -f "celery.*tasks.*worker" > /dev/null; then
     echo "Starting Celery worker..."
-    celery -A tasks worker --loglevel=info &
+    $CELERY_CMD -A tasks worker --loglevel=info --pool=solo &
     CELERY_PID=$!
     sleep 2
 else
@@ -45,7 +52,7 @@ if ! pgrep -f "uvicorn.*api:app" > /dev/null; then
     echo "Starting API on http://localhost:8000"
     echo "Press Ctrl+C to stop all services"
     echo ""
-    uvicorn api:app --reload --port 8000
+    $UVICORN_CMD api:app --reload --port 8000 --reload-exclude '.venv'
 else
     echo "API already running on http://localhost:8000"
     echo "All services are running!"

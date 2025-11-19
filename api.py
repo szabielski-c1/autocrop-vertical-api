@@ -166,6 +166,45 @@ async def download_result(job_id: str):
     )
 
 
+@app.post("/retry/{job_id}")
+async def retry_job(job_id: str, webhook_url: Optional[str] = None):
+    """
+    Retry a failed job by re-queuing it with the same input file.
+    """
+    # Find the input file
+    input_path = None
+    for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
+        potential_path = UPLOAD_DIR / f"{job_id}_input{ext}"
+        if potential_path.exists():
+            input_path = potential_path
+            break
+
+    if not input_path:
+        raise HTTPException(status_code=404, detail="Input file not found. Cannot retry.")
+
+    # Generate new job ID
+    new_job_id = str(uuid.uuid4())
+
+    # Rename input file to new job ID
+    new_input_path = UPLOAD_DIR / f"{new_job_id}_input{input_path.suffix}"
+    input_path.rename(new_input_path)
+
+    # Set output path
+    output_path = OUTPUT_DIR / f"{new_job_id}_output.mp4"
+
+    # Queue the processing task
+    task = process_video_task.apply_async(
+        args=[str(new_input_path), str(output_path), webhook_url],
+        task_id=new_job_id
+    )
+
+    return JobResponse(
+        job_id=new_job_id,
+        status="queued",
+        message="Job re-queued for processing"
+    )
+
+
 @app.delete("/job/{job_id}")
 async def delete_job(job_id: str):
     """

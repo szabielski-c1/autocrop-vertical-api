@@ -129,6 +129,12 @@
         .job-status.failed {
             color: #dc3545;
         }
+        .job-time {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+            font-family: monospace;
+        }
         .job-actions {
             margin-left: 15px;
         }
@@ -141,6 +147,13 @@
         }
         .download-btn:hover {
             background: #117a8b;
+        }
+        .retry-btn {
+            background: #ffc107;
+            color: #333;
+        }
+        .retry-btn:hover {
+            background: #e0a800;
         }
         .delete-btn {
             background: #dc3545;
@@ -219,6 +232,23 @@
 
         let jobs = JSON.parse(localStorage.getItem('autocrop-jobs') || '[]');
         let pollingInterval = null;
+        let timerInterval = null;
+
+        // Format elapsed time as MM:SS or HH:MM:SS
+        function formatElapsedTime(startTime, endTime = null) {
+            const start = new Date(startTime).getTime();
+            const end = endTime ? new Date(endTime).getTime() : Date.now();
+            const elapsed = Math.floor((end - start) / 1000);
+
+            const hours = Math.floor(elapsed / 3600);
+            const minutes = Math.floor((elapsed % 3600) / 60);
+            const seconds = elapsed % 60;
+
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
 
         // File selection
         fileInput.addEventListener('change', () => {
@@ -292,7 +322,15 @@
                 return;
             }
 
-            jobsList.innerHTML = jobs.map(job => `
+            jobsList.innerHTML = jobs.map(job => {
+                let timeDisplay = '';
+                if (job.status === 'pending' || job.status === 'processing') {
+                    timeDisplay = formatElapsedTime(job.createdAt);
+                } else if (job.completedAt) {
+                    timeDisplay = formatElapsedTime(job.createdAt, job.completedAt);
+                }
+
+                return `
                 <div class="job" data-id="${job.id}">
                     <div class="job-info">
                         <div class="job-name">${job.name}</div>
@@ -305,15 +343,19 @@
                                 <div class="progress-bar-fill" style="width: ${job.progress.progress}%"></div>
                             </div>
                         ` : ''}
+                        <div class="job-time">${timeDisplay}</div>
                     </div>
                     <div class="job-actions">
                         ${job.status === 'completed' ? `
                             <button class="download-btn" onclick="downloadJob('${job.id}')">Download</button>
                         ` : ''}
+                        ${job.status === 'failed' ? `
+                            <button class="retry-btn" onclick="retryJob('${job.id}')">Retry</button>
+                        ` : ''}
                         <button class="delete-btn" onclick="deleteJob('${job.id}')">Delete</button>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         // Poll for status updates
@@ -331,10 +373,15 @@
                     const response = await fetch(`${apiUrl}/status/${job.id}`);
                     if (response.ok) {
                         const data = await response.json();
+                        const wasRunning = job.status === 'pending' || job.status === 'processing';
                         job.status = data.status;
                         job.progress = data.progress;
                         if (data.error) {
                             job.error = data.error;
+                        }
+                        // Set completedAt when job finishes
+                        if (wasRunning && (data.status === 'completed' || data.status === 'failed')) {
+                            job.completedAt = new Date().toISOString();
                         }
                     }
                 } catch (error) {
@@ -351,6 +398,10 @@
                 pollingInterval = setInterval(pollStatuses, 3000);
                 pollStatuses(); // Immediate first poll
             }
+            // Start timer updates every second
+            if (!timerInterval) {
+                timerInterval = setInterval(renderJobs, 1000);
+            }
         }
 
         function stopPolling() {
@@ -358,12 +409,61 @@
                 clearInterval(pollingInterval);
                 pollingInterval = null;
             }
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
         }
 
         // Download
         function downloadJob(jobId) {
             const apiUrl = getApiUrl().replace(/\/$/, '');
             window.open(`${apiUrl}/download/${jobId}`, '_blank');
+        }
+
+        // Retry
+        async function retryJob(jobId) {
+            const apiUrl = getApiUrl().replace(/\/$/, '');
+            const webhookUrl = webhookUrlInput.value;
+
+            try {
+                const url = webhookUrl
+                    ? `${apiUrl}/retry/${jobId}?webhook_url=${encodeURIComponent(webhookUrl)}`
+                    : `${apiUrl}/retry/${jobId}`;
+
+                const response = await fetch(url, { method: 'POST' });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Retry failed');
+                }
+
+                const data = await response.json();
+
+                // Find the old job to get its name
+                const oldJob = jobs.find(j => j.id === jobId);
+                const jobName = oldJob ? oldJob.name : 'Retried job';
+
+                // Remove old job
+                jobs = jobs.filter(j => j.id !== jobId);
+
+                // Add new job
+                jobs.push({
+                    id: data.job_id,
+                    name: jobName,
+                    status: 'pending',
+                    progress: null,
+                    createdAt: new Date().toISOString()
+                });
+
+                saveJobs();
+                renderJobs();
+                startPolling();
+
+            } catch (error) {
+                console.error('Retry error:', error);
+                alert(`Failed to retry job: ${error.message}`);
+            }
         }
 
         // Delete

@@ -28,8 +28,11 @@ COPY . .
 # Create directories for uploads and outputs
 RUN mkdir -p uploads outputs
 
+# Make start script executable
+RUN chmod +x start.sh
+
 # Expose port
 EXPOSE 8000
 
-# Start the application (use shell form to expand $PORT)
-CMD uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}
+# Start the application
+CMD ["./start.sh"]

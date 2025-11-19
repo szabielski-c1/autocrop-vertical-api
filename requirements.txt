@@ -1,3 +1,4 @@
+# OpenCV headless for server deployment
 opencv-python-headless
 scenedetect[opencv]
 ultralytics

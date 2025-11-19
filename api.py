@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import Optional
 from celery.result import AsyncResult
@@ -14,6 +15,15 @@ app = FastAPI(
     title="AutoCrop-Vertical API",
     description="Convert horizontal videos to vertical format for social media",
     version="1.0.0"
+)
+
+# Enable CORS for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Configure upload/output directories

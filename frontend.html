@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoCrop Vertical</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .upload-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .config {
+            margin-bottom: 15px;
+        }
+        .config label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        .config input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .file-input {
+            margin: 15px 0;
+        }
+        .file-input input {
+            display: none;
+        }
+        .file-input label {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .file-input label:hover {
+            background: #0056b3;
+        }
+        .selected-files {
+            margin: 10px 0;
+            color: #666;
+        }
+        button {
+            padding: 10px 20px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #1e7e34;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .jobs-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .job {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .job:last-child {
+            border-bottom: none;
+        }
+        .job-info {
+            flex: 1;
+        }
+        .job-name {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .job-status {
+            font-size: 14px;
+            color: #666;
+        }
+        .job-status.pending {
+            color: #ffc107;
+        }
+        .job-status.processing {
+            color: #007bff;
+        }
+        .job-status.completed {
+            color: #28a745;
+        }
+        .job-status.failed {
+            color: #dc3545;
+        }
+        .job-actions {
+            margin-left: 15px;
+        }
+        .job-actions button {
+            padding: 6px 12px;
+            font-size: 14px;
+        }
+        .download-btn {
+            background: #17a2b8;
+        }
+        .download-btn:hover {
+            background: #117a8b;
+        }
+        .delete-btn {
+            background: #dc3545;
+            margin-left: 5px;
+        }
+        .delete-btn:hover {
+            background: #bd2130;
+        }
+        .progress-bar {
+            height: 4px;
+            background: #e9ecef;
+            border-radius: 2px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: #007bff;
+            transition: width 0.3s;
+        }
+        .no-jobs {
+            text-align: center;
+            color: #999;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>AutoCrop Vertical</h1>
+
+    <div class="upload-section">
+        <div class="config">
+            <label for="api-url">API URL</label>
+            <input type="text" id="api-url" value="https://autocrop-api-production.up.railway.app">
+        </div>
+
+        <div class="config">
+            <label for="webhook-url">Webhook URL (optional)</label>
+            <input type="text" id="webhook-url" placeholder="https://your-webhook.com/callback">
+        </div>
+
+        <div class="file-input">
+            <label for="video-files">Select Videos</label>
+            <input type="file" id="video-files" multiple accept="video/*">
+        </div>
+        <div class="selected-files" id="selected-files">No files selected</div>
+
+        <button id="upload-btn" disabled>Upload & Process</button>
+    </div>
+
+    <div class="jobs-section">
+        <h2>Jobs</h2>
+        <div id="jobs-list">
+            <div class="no-jobs">No jobs yet. Upload videos to get started.</div>
+        </div>
+    </div>
+
+    <script>
+        const apiUrlInput = document.getElementById('api-url');
+        const webhookUrlInput = document.getElementById('webhook-url');
+        const fileInput = document.getElementById('video-files');
+        const selectedFilesDiv = document.getElementById('selected-files');
+        const uploadBtn = document.getElementById('upload-btn');
+        const jobsList = document.getElementById('jobs-list');
+
+        let jobs = JSON.parse(localStorage.getItem('autocrop-jobs') || '[]');
+        let pollingInterval = null;
+
+        // File selection
+        fileInput.addEventListener('change', () => {
+            const files = fileInput.files;
+            if (files.length > 0) {
+                selectedFilesDiv.textContent = `${files.length} file(s) selected`;
+                uploadBtn.disabled = false;
+            } else {
+                selectedFilesDiv.textContent = 'No files selected';
+                uploadBtn.disabled = true;
+            }
+        });
+
+        // Upload handler
+        uploadBtn.addEventListener('click', async () => {
+            const files = fileInput.files;
+            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            const webhookUrl = webhookUrlInput.value;
+
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = 'Uploading...';
+
+            for (const file of files) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    if (webhookUrl) {
+                        formData.append('webhook_url', webhookUrl);
+                    }
+
+                    const response = await fetch(`${apiUrl}/process`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Upload failed: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+
+                    jobs.push({
+                        id: data.job_id,
+                        name: file.name,
+                        status: 'pending',
+                        progress: null,
+                        createdAt: new Date().toISOString()
+                    });
+
+                } catch (error) {
+                    console.error('Upload error:', error);
+                    alert(`Failed to upload ${file.name}: ${error.message}`);
+                }
+            }
+
+            saveJobs();
+            renderJobs();
+            startPolling();
+
+            // Reset
+            fileInput.value = '';
+            selectedFilesDiv.textContent = 'No files selected';
+            uploadBtn.textContent = 'Upload & Process';
+            uploadBtn.disabled = true;
+        });
+
+        // Render jobs
+        function renderJobs() {
+            if (jobs.length === 0) {
+                jobsList.innerHTML = '<div class="no-jobs">No jobs yet. Upload videos to get started.</div>';
+                return;
+            }
+
+            jobsList.innerHTML = jobs.map(job => `
+                <div class="job" data-id="${job.id}">
+                    <div class="job-info">
+                        <div class="job-name">${job.name}</div>
+                        <div class="job-status ${job.status}">
+                            ${job.status.charAt(0).toUpperCase() + job.status.slice(1)}
+                            ${job.progress?.message ? ` - ${job.progress.message}` : ''}
+                        </div>
+                        ${job.status === 'processing' && job.progress?.progress ? `
+                            <div class="progress-bar">
+                                <div class="progress-bar-fill" style="width: ${job.progress.progress}%"></div>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="job-actions">
+                        ${job.status === 'completed' ? `
+                            <button class="download-btn" onclick="downloadJob('${job.id}')">Download</button>
+                        ` : ''}
+                        <button class="delete-btn" onclick="deleteJob('${job.id}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Poll for status updates
+        async function pollStatuses() {
+            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            const pendingJobs = jobs.filter(j => j.status === 'pending' || j.status === 'processing');
+
+            if (pendingJobs.length === 0) {
+                stopPolling();
+                return;
+            }
+
+            for (const job of pendingJobs) {
+                try {
+                    const response = await fetch(`${apiUrl}/status/${job.id}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        job.status = data.status;
+                        job.progress = data.progress;
+                        if (data.error) {
+                            job.error = data.error;
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Status check failed for ${job.id}:`, error);
+                }
+            }
+
+            saveJobs();
+            renderJobs();
+        }
+
+        function startPolling() {
+            if (!pollingInterval) {
+                pollingInterval = setInterval(pollStatuses, 3000);
+                pollStatuses(); // Immediate first poll
+            }
+        }
+
+        function stopPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+        }
+
+        // Download
+        function downloadJob(jobId) {
+            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+            window.open(`${apiUrl}/download/${jobId}`, '_blank');
+        }
+
+        // Delete
+        async function deleteJob(jobId) {
+            const apiUrl = apiUrlInput.value.replace(/\/$/, '');
+
+            try {
+                await fetch(`${apiUrl}/job/${jobId}`, { method: 'DELETE' });
+            } catch (error) {
+                console.error('Delete error:', error);
+            }
+
+            jobs = jobs.filter(j => j.id !== jobId);
+            saveJobs();
+            renderJobs();
+        }
+
+        // Persistence
+        function saveJobs() {
+            localStorage.setItem('autocrop-jobs', JSON.stringify(jobs));
+        }
+
+        // Initial render
+        renderJobs();
+
+        // Resume polling if there are pending jobs
+        if (jobs.some(j => j.status === 'pending' || j.status === 'processing')) {
+            startPolling();
+        }
+    </script>
+</body>
+</html>
